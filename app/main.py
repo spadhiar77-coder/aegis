@@ -10,15 +10,15 @@ from app.db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Runs once at startup: make sure the tables exist.
+    # Runs once at startup: apply any pending database migrations.
     init_db()
     yield
 
 
 app = FastAPI(
     title="Aegis",
-    version="0.1.0",
-    summary="Fintech risk & operations API (Loop 1: rule-based skeleton)",
+    version="0.2.0",
+    summary="Fintech risk & operations API (Loop 2: behavioural-feature model)",
     lifespan=lifespan,
 )
 

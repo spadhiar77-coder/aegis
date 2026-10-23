@@ -1,4 +1,10 @@
-"""End-to-end tests through HTTP and the real database."""
+"""End-to-end tests through HTTP and the real database, using the Loop 1 rules
+detector so expectations stay exact. The model detector has its own API tests
+in test_model_api.py."""
+
+import pytest
+
+pytestmark = pytest.mark.usefixtures("use_rules")
 
 
 def txn(**overrides):
@@ -28,6 +34,8 @@ def test_normal_transaction_is_stored_without_incident(client):
     assert body["flagged"] is False
     assert body["incident_id"] is None
     assert body["transaction"]["risk_score"] == 0.0
+    assert body["transaction"]["detector"] == "rules"
+    assert body["transaction"]["model_version"] == "rules-loop1"
     assert client.get("/v1/incidents").json()["total"] == 0
 
 

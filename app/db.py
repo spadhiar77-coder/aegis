@@ -7,8 +7,9 @@
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_database_url
@@ -31,13 +32,30 @@ def get_session() -> Iterator[Session]:
         session.close()
 
 
+ALEMBIC_INI = Path(__file__).resolve().parent.parent / "alembic.ini"
+LOOP1_REVISION = "0001"
+
+
+def alembic_config():
+    from alembic.config import Config
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.attributes["configure_logging"] = False  # leave uvicorn's/pytest's logging alone
+    return cfg
+
+
 def init_db() -> None:
-    """Create tables that don't exist yet.
+    """Bring the database schema up to date by running Alembic migrations.
 
-    Loop 1 shortcut: no migrations tool. If a model changes, drop the tables
-    (or the database) and restart. Alembic is planned for when the schema
-    starts evolving with real data in it.
+    A database created by Loop 1 (tables made by `create_all`, no
+    `alembic_version` table) is first stamped as revision 0001, which matches
+    the Loop 1 schema exactly, so its data is kept and only newer migrations
+    run.
     """
-    from app import models  # noqa: F401  (import registers the models on Base)
+    from alembic import command
 
-    Base.metadata.create_all(bind=engine)
+    cfg = alembic_config()
+    names = set(inspect(engine).get_table_names())
+    if "transactions" in names and "alembic_version" not in names:
+        command.stamp(cfg, LOOP1_REVISION)
+    command.upgrade(cfg, "head")

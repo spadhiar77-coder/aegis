@@ -61,6 +61,8 @@ class TransactionOut(BaseModel):
     status: str
     risk_score: float
     risk_reasons: list[RuleHitOut]
+    detector: str
+    model_version: str | None
     received_at: datetime
 
 

@@ -8,14 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import rules
+from app import detection, features, rules
 from app.models import Incident, IncidentEvent, Transaction
 from app.schemas import TransactionIn
 
-# How many of the customer's previous transactions the rules get to see.
-# Plenty for the velocity and new-device rules; replaced by proper
-# precomputed features in Loop 2.
-HISTORY_LIMIT = 200
+# How many of the customer's previous transactions the detector gets to see.
+# Shared with the offline training code so the model is scored on the same
+# view of history it was trained on.
+HISTORY_LIMIT = features.HISTORY_LIMIT
 
 
 class DuplicateTransactionError(Exception):
@@ -44,13 +44,15 @@ def ingest_transaction(session: Session, txn_in: TransactionIn) -> tuple[Transac
         raise DuplicateTransactionError(txn_in.transaction_id)
 
     history = load_customer_history(session, txn_in)
-    assessment = rules.assess(txn_in, history)
+    assessment = detection.assess(txn_in, history)
     reasons = [hit.as_dict() for hit in assessment.hits]
 
     txn = Transaction(
         **txn_in.model_dump(),
         risk_score=assessment.score,
         risk_reasons=reasons,
+        detector=assessment.detector,
+        model_version=assessment.version,
     )
     session.add(txn)
 
@@ -72,6 +74,9 @@ def ingest_transaction(session: Session, txn_in: TransactionIn) -> tuple[Transac
                     "trigger_transaction_id": txn_in.transaction_id,
                     "rules": [h.rule for h in assessment.hits],
                     "score": assessment.score,
+                    "threshold": assessment.threshold,
+                    "detector": assessment.detector,
+                    "model_version": assessment.version,
                 },
             )
         )
@@ -89,7 +94,7 @@ def ingest_transaction(session: Session, txn_in: TransactionIn) -> tuple[Transac
 
 
 def _summarise(txn: TransactionIn, assessment: rules.Assessment) -> str:
-    rule_names = ", ".join(h.rule for h in assessment.hits)
+    rule_names = ", ".join(h.rule for h in assessment.hits) or "overall risk score"
     return (
         f"{txn.amount} {txn.currency} at {txn.merchant} by customer {txn.customer_id} "
         f"flagged by: {rule_names}"

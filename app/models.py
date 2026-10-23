@@ -1,4 +1,11 @@
-"""ORM models: the four tables Loop 1 needs.
+"""ORM models.
+
+The schema is managed by Alembic (migrations/). After changing a model, run
+`alembic revision --autogenerate -m "..."`, review the generated file, and
+commit it with the model change; tests/test_migrations.py fails if the two
+ever disagree.
+
+Tables:
 
     transactions            one row per ingested transaction
     incidents               a case opened when a transaction looks suspicious
@@ -50,6 +57,10 @@ class Transaction(Base):
     # has a score and an explanation, not just the flagged ones.
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
     risk_reasons: Mapped[list] = mapped_column(JSON, default=list)
+    # Which detector scored it ("rules" or "model") and which version, so a
+    # score can always be traced back to the exact logic that produced it.
+    detector: Mapped[str] = mapped_column(String(32), default="rules", server_default="rules")
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
