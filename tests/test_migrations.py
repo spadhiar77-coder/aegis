@@ -38,7 +38,7 @@ def test_loop1_database_is_adopted_without_data_loss():
 
     init_db()
 
-    assert current_revision() == "0002"
+    assert current_revision() == "0003"
     columns = {c["name"] for c in inspect(engine).get_columns("transactions")}
     assert {"detector", "model_version"} <= columns
     with engine.connect() as conn:

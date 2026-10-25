@@ -6,8 +6,10 @@ analysts evidence to investigate. AI assists; the analyst decides.
 
 This is a learning/portfolio project reproducing the core workflow of real
 fraud systems. It is built in spiral loops (see [DEVLOG.md](DEVLOG.md)).
+Everything is Python: FastAPI serves both the JSON API and the analyst web
+app, whose pages are rendered on the server with Jinja2 (no JavaScript).
 
-## Status: Loop 2 (trained model)
+## Status: Loop 3 (web app and analyst workflow)
 
 | Area | Implemented now | Planned |
 |---|---|---|
@@ -15,11 +17,12 @@ fraud systems. It is built in spiral loops (see [DEVLOG.md](DEVLOG.md)).
 | Storage | PostgreSQL via SQLAlchemy, schema managed by Alembic migrations | |
 | Detection | Logistic regression over 15 per-customer behavioural features, with per-decision explanations. Loop 1 rules kept as a fallback (`AEGIS_DETECTOR=rules`) | Retraining on analyst decisions; a public labelled dataset |
 | Evaluation | Labelled simulator, time-based split, precision/recall/PR-AUC vs the rules, Isolation Forest and gradient boosting ([results](reports/loop2_results.md)) | |
-| Incidents | Auto-created when the model's score passes its threshold, with severity, evidence, linked transactions and an audit trail recording detector + model version | Approve/dismiss, analyst actions in audit trail, Word report (Loop 3) |
+| Incidents | Auto-created when the model's score passes its threshold, with severity, evidence, linked transactions and an audit trail recording detector + model version | Case reports |
+| Analyst workflow | Confirm, dismiss, reopen, add notes; every action appended to the audit trail. In the web app and at `POST /v1/incidents/{id}/actions` | Logins and roles; decisions feeding retraining |
 | Read API | `GET /v1/incidents` (filters, pagination), `GET /v1/incidents/{id}` | |
-| UI | Plain HTML incident list + detail at `/` | Streamlit or React |
+| Web app | Incident queue and case file (score breakdown, customer history, decisions), transaction tester, model results, demo mode with a simulated live feed and answer key | |
 | AI investigator | Not started | Loop 4 |
-| Ops | Dockerfile, docker-compose, pytest suite, GitHub Actions CI | Monitoring, webhooks, queue (Loop 5) |
+| Ops | Dockerfile, docker-compose, pytest suite, GitHub Actions CI, one-click Render deployment | Monitoring, webhooks, queue (Loop 5) |
 
 ### Loop 2 headline (simulated data, held-out test window)
 
@@ -94,12 +97,47 @@ account and alarming for someone who usually spends 30.
 
 Score = capped sum of the weights that fired; flagged at ≥ 0.5.
 
+## The web app
+
+Open http://localhost:8000/ once it's running (below).
+
+| Page | What it does |
+|---|---|
+| Incident queue `/` | Open, all or decided incidents. Selecting one opens its case file: risk score against the threshold, the reasons, every feature's push on the score, the customer's recent activity, what the Loop 1 rules would have said, and the decision form and audit trail. |
+| Test a transaction `/test` | Build a payment for any customer, or start from an example (stolen login abroad, card testing, scam payment). **Check score** scores it without saving; **Send to Aegis** ingests it like any other payment. |
+| Model results `/results` | The Loop 2 evaluation: all five detectors, recall by fraud type, where false alarms come from, robustness across datasets. |
+| How it works `/how` | The pipeline, the features and the roadmap. |
+
+**Demo mode** (`AEGIS_DEMO=1`, the default) adds a **Load demo data** button
+to an empty database: 40 simulated customers and 17 days of payments, scored
+by the model. **Advance** sends the next hour, 6 hours or day of payments
+through the normal ingest path, and **Show answer key** reveals which payments
+were really fraud, including the fraud the model missed. **Restart demo**
+deletes every row, so set `AEGIS_DEMO=0` anywhere real data lives.
+
+Analysts type their name when they record a decision (the browser remembers
+it). There are no logins yet, so don't expose an instance holding real data.
+
+## Deploying
+
+`render.yaml` is a blueprint for [Render](https://render.com): in the Render
+dashboard choose **New > Blueprint** and pick this repository. It builds the
+Docker image, creates a PostgreSQL database and connects the two; migrations
+run on startup. Then open the app's URL and choose **Load demo data**. Free
+plans sleep when idle (the first visit after that takes a little while) and
+the free database is time-limited, so check Render's current terms.
+
+Any other host that runs a Docker image works the same way: set
+`DATABASE_URL` (a `postgres://` URL from the provider is fine) and the app
+listens on `$PORT`.
+
 ## Running it
 
 ### Option A: everything in Docker
 
 ```bash
 docker compose up --build
+# then open http://localhost:8000/ and choose "Load demo data", or send traffic to the API:
 python scripts/simulate.py --customers 30 --days 14 --seed 7   # in another terminal
 ```
 
@@ -115,7 +153,7 @@ python scripts/simulate.py --customers 30 --days 14 --seed 7
 
 Then open:
 
-- http://localhost:8000/ : incident list (click through for detail)
+- http://localhost:8000/ : the web app
 - http://localhost:8000/docs : interactive OpenAPI docs
 - http://localhost:8000/v1/incidents : raw JSON
 
@@ -126,6 +164,7 @@ Configuration (see `.env.example`):
 
 - `DATABASE_URL`: where PostgreSQL lives.
 - `AEGIS_DETECTOR`: `model` (default) or `rules` (Loop 1).
+- `AEGIS_DEMO`: `1` (default) shows the demo controls; `0` hides them.
 
 ### Training the model
 
@@ -183,7 +222,7 @@ between tests, so never point it at data you care about.
 ```
 app/
   main.py            FastAPI app, router wiring, startup (runs migrations)
-  config.py          DATABASE_URL, AEGIS_DETECTOR
+  config.py          DATABASE_URL, AEGIS_DETECTOR, AEGIS_DEMO
   db.py              engine, sessions, migration runner
   models.py          ORM tables: transactions, incidents, links, audit events
   schemas.py         Pydantic request/response contracts
@@ -192,8 +231,10 @@ app/
   model/model.json   the trained logistic regression, as plain numbers
   rules.py           Loop 1 detector (fallback) and the shared Assessment type
   detection.py       picks the detector
-  services.py        ingest → score → incident
-  api/               HTTP routes (transactions, incidents, HTML pages)
+  services.py        ingest → score → incident; analyst decisions
+  demo.py            demo mode: load simulated data, advance the feed, answer key
+  api/               JSON API routes (transactions, incidents, decisions)
+  web/               the web app: routes, presentation helpers, Jinja2 templates, CSS
 ml/
   simulation.py      labelled synthetic data (stdlib only)
   dataset.py         replay → feature matrix, time-based split
@@ -201,5 +242,6 @@ ml/
 migrations/          Alembic migrations
 reports/             evaluation results
 scripts/simulate.py  replays simulated traffic through the API, scores it against the labels
-tests/               unit, API, model and migration tests
+tests/               unit, API, web, model and migration tests
+render.yaml          one-click deployment on Render
 ```

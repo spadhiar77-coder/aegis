@@ -28,8 +28,11 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - name: Tests (unit, API against Postgres, migrations)
-        run: pytest -q
+      - name: Tests (unit, API, web pages and migrations against Postgres)
+        run: pytest -q 2>&1 | tee pytest.log; exit ${PIPESTATUS[0]}
+      - name: Report test failures as annotations
+        if: failure()
+        run: grep -E "^(FAILED|ERROR)|^E " pytest.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done
       - name: Committed model is reproducible from the training code
         run: python -m ml.train --check
 
@@ -43,6 +46,11 @@ jobs:
         run: |
           for i in $(seq 1 30); do curl -fs localhost:8000/health && exit 0; sleep 2; done
           docker compose logs api; exit 1
+      - name: Web app loads the demo and serves its pages
+        run: |
+          curl -fsS -X POST -o /dev/null localhost:8000/demo/reset
+          for page in / /test /results /how; do curl -fsS -o /dev/null "localhost:8000$page" || exit 1; done
+          curl -fsS localhost:8000/ | grep -q "Incident #"
       - name: Simulator runs end to end
         run: python3 scripts/simulate.py --customers 20 --days 10 --seed 7
       - if: always()

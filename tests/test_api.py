@@ -97,3 +97,17 @@ def test_html_pages_escape_user_input(client):
         assert page.status_code == 200
         assert "<script>x</script>" not in page.text
         assert "&lt;script&gt;" in page.text
+
+
+def test_incident_actions_api(client):
+    iid = client.post("/v1/transactions", json=txn(transaction_id="big", amount="7500.00")).json()["incident_id"]
+    r = client.post(f"/v1/incidents/{iid}/actions", json={"action": "dismiss", "analyst": "sam", "note": "known business payment"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "dismissed"
+    assert body["events"][-1]["detail"] == {"from": "open", "to": "dismissed", "note": "known business payment"}
+    assert client.post(f"/v1/incidents/{iid}/actions", json={"action": "dismiss", "analyst": "sam"}).status_code == 409
+    assert client.post(f"/v1/incidents/{iid}/actions", json={"action": "reopen", "analyst": "sam"}).json()["status"] == "open"
+    assert client.post(f"/v1/incidents/{iid}/actions", json={"action": "note", "analyst": "sam", "note": " "}).status_code == 409
+    assert client.post(f"/v1/incidents/{iid}/actions", json={"action": "delete", "analyst": "sam"}).status_code == 422
+    assert client.post("/v1/incidents/999/actions", json={"action": "note", "analyst": "sam", "note": "x"}).status_code == 404

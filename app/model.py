@@ -89,6 +89,11 @@ class LogisticModel:
             version=self.version,
             high_at=SEVERITY_HIGH,
             medium_at=SEVERITY_MEDIUM,
+            breakdown={
+                "intercept": round(self.intercept, 4),
+                "contributions": {k: round(v, 4) for k, v in contrib.items()},
+                "features": {k: round(v, 4) for k, v in f.values.items()},
+            },
         )
 
 

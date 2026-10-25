@@ -71,6 +71,8 @@ class Assessment:
     version: str = RULES_VERSION
     high_at: float = 0.8
     medium_at: float = 0.6
+    # Model only: {"intercept": float, "contributions": {feature: log-odds}}
+    breakdown: dict | None = None
 
     @property
     def flagged(self) -> bool:

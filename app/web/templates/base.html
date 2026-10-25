@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% block title %}Aegis Fraud Console{% endblock %}</title>
+<meta name="description" content="Aegis: a fraud detection engine with an incident queue, explainable model scores and analyst decisions.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..700&family=IBM+Plex+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&display=swap">
+<style>{{ CSS }}</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="/" aria-label="Aegis home">
+    <svg viewBox="0 0 26 30" aria-hidden="true"><path d="M13 1 2 5v8c0 7.4 4.6 13.3 11 16 6.4-2.7 11-8.6 11-16V5L13 1Z" fill="var(--accent)"/><path d="M13 7v16M8 12h10" stroke="var(--surface)" stroke-width="2.2" stroke-linecap="round"/></svg>
+    <b>AEGIS</b><span>Fraud operations{% if demo_enabled %} · demo{% endif %}</span></a>
+  <nav class="tabs" aria-label="Sections">
+    {% for key, href, label in [("queue", "/", "Incident queue"), ("test", "/test", "Test a transaction"), ("results", "/results", "Model results"), ("how", "/how", "How it works")] %}
+    <a href="{{ href }}" {% if active == key %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+</div></header>
+<main class="wrap">
+  {% if flash %}<p class="flash" role="status">{{ flash }}</p>{% endif %}
+  {% block content %}{% endblock %}
+  <footer>Aegis is a portfolio project{% if demo_enabled %}; every customer and transaction in the demo is simulated{% endif %}. API documentation at <a href="/docs">/docs</a>. Source on <a href="https://github.com/spadhiar77-coder/aegis" rel="noopener">GitHub</a>.</footer>
+</main>
+</body>
+</html>

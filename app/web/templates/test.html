@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_macros.html" import meter, reasons, chart %}
+{% block title %}Test a transaction · Aegis{% endblock %}
+{% block content %}
+<p class="intro">Build a transaction for a customer and see how Aegis would score it. <strong>Check score</strong> scores it without saving anything. <strong>Send to Aegis</strong> ingests it like any other payment: it joins the customer's history and opens an incident if it is flagged.</p>
+{% if error %}<p class="flash error" role="alert">{{ error }}</p>{% endif %}
+<div class="lab">
+  <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+    <form class="panel form" method="get" action="/test" autocomplete="off">
+      <div class="field"><label for="t-cust">Customer</label>
+        {% if customers %}
+        <select id="t-cust" name="customer">{% for c, n in customers %}<option value="{{ c }}" {% if c == customer %}selected{% endif %}>{{ c }} · {{ n }} transactions</option>{% endfor %}</select>
+        {% else %}
+        <input id="t-cust" name="customer" value="{{ customer }}" maxlength="64">
+        {% endif %}
+      </div>
+      <div class="field"><span class="label">Start from an example</span>
+        <div class="presets">{% for k, l in presets.items() %}<a href="/test?customer={{ customer|urlencode }}&amp;preset={{ k }}" aria-current="{{ 'true' if preset == k else 'false' }}">{{ l }}</a>{% endfor %}</div></div>
+      <div class="row2">
+        <div class="field"><label for="t-amount">Amount (GBP)</label><input id="t-amount" name="amount" class="mono" type="number" min="0.01" step="0.01" value="{{ form.amount }}" required></div>
+        <div class="field"><label for="t-when">Time (UTC)</label><input id="t-when" name="when" class="mono" type="datetime-local" value="{{ form.when }}" required></div>
+      </div>
+      <div class="field"><label for="t-merchant">Merchant or payee</label><input id="t-merchant" name="merchant" list="merchants" maxlength="128" value="{{ form.merchant }}" required>
+        <datalist id="merchants">{% for m in merchants %}<option value="{{ m }}">{% endfor %}</datalist></div>
+      <div class="row2">
+        <div class="field"><label for="t-loc">Location</label><select id="t-loc" name="location">{% for c in countries %}<option {% if c == form.location %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="t-dev">Device</label><select id="t-dev" name="device">
+          {% for d, n in devices %}<option value="{{ d }}" {% if d == form.device %}selected{% endif %}>{% if n %}{{ short_device(d) }} (used {{ n }}×){% else %}A new device{% endif %}</option>{% endfor %}</select></div>
+      </div>
+      <label class="checkbox"><input type="checkbox" name="prelude" value="1" {% if form.prelude %}checked{% endif %}> Precede it with 4 tiny payments (£0.99–£3.10) from the same device in the previous 6 minutes</label>
+      <div class="actions">
+        <button class="btn" type="submit">Check score</button>
+        {% if known_customer or not customers %}<button class="btn primary" type="submit" formmethod="post" formaction="/test">Send to Aegis</button>{% endif %}
+      </div>
+    </form>
+
+    <div class="panel profile"><span class="label">{{ customer }} · profile from {{ profile.n }} transactions</span>
+      {% if profile.n %}
+      <dl class="facts"><div><dt>Typical amount</dt><dd>{{ gbp(profile.typical) }}</dd></div><div><dt>Largest</dt><dd>{{ gbp(profile.largest) }}</dd></div>
+        <div><dt>Locations</dt><dd>{{ profile.locations|map('first')|join(', ') }}</dd></div><div><dt>Devices</dt><dd>{{ profile.devices|length }}</dd></div></dl>
+      <div><span class="label">When they pay (UTC hour)</span>
+        <div class="hours" role="img" aria-label="Transactions by hour of day">{% for h, c, o in profile.hour_cells %}<i title="{{ '%02d' % h }}:00 · {{ c }}" style="opacity:{{ '%.2f' % o }}"></i>{% endfor %}</div>
+        <div class="hours-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div></div>
+      {% else %}<p class="note">No history yet. New customers get neutral scores until they have a few transactions.</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="panel result" aria-live="polite">
+  {% if result %}{% set m = result.model %}
+    {% if m.flagged %}<div class="verdict flag"><b>Would open a {{ m.severity }}-severity incident</b><span class="num">{{ score(m.score) }}</span></div>
+    {% else %}<div class="verdict pass"><b>Would pass without an alert</b><span class="num">{{ score(m.score) }}</span></div>{% endif %}
+    {% if preset == 'scam' and not m.flagged %}<div class="callout"><b>A known blind spot.</b><p>To the model, a scam payment looks like a genuine transfer: the real customer, on their own phone, at a normal hour. Loop 1's rules catch it only because they flag every payment over £5,000. <a href="/results">Model results</a> shows what fixing this would cost.</p></div>{% endif %}
+    <div><h3>Risk score ({{ 'Loop 2 model' if m.detector == 'model' else 'Loop 1 rules' }})</h3>{{ meter(result.meter) }}</div>
+    <div class="versus">
+      <div><span class="label">Loop 2 model</span><div><span class="num">{{ score(m.score) }}</span> · {% if m.flagged %}<span class="pill sev-{{ m.severity }}">flag</span>{% else %}pass{% endif %}</div></div>
+      <div><span class="label">Loop 1 rules</span><div><span class="num">{{ score(result.rules.score) }}</span> · {% if result.rules.flagged %}<span class="pill sev-{{ result.rules.severity }}">flag</span>{% else %}pass{% endif %}</div>
+        <p class="note">{{ result.rules.hits|map(attribute='rule')|join(', ') or 'no rule fired' }}</p></div>
+    </div>
+    {% if m.hits %}<div><h3>Top reasons</h3>{{ reasons(m.hits) }}</div>{% endif %}
+    {% if result.chart %}{{ chart(result.chart) }}{% endif %}
+  {% else %}
+    <p class="muted">Fill in the form and choose <b>Check score</b>.</p>
+  {% endif %}
+  </div>
+</div>
+{% endblock %}

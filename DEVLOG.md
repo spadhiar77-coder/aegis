@@ -185,3 +185,69 @@ simulated patterns, not that they would catch real fraud.
   Fine now; precomputed per-customer aggregates would be needed at scale.
 - Severity bands (0.7 / 0.9) are placeholders until analyst feedback shows
   what high severity should mean.
+
+---
+
+## Loop 3: the web app and analyst workflow (2026-10-25)
+
+### Plan
+Turn Aegis into an app someone can use, entirely in Python: an analyst
+opens the incident queue, reads a case, and confirms or dismisses it, and
+that decision is stored and audited. Make it easy to show (a demo that fills
+itself) and easy to put online.
+
+A browser-only version (the model ported to JavaScript) came first, as a
+quick way to show the work. It was a dead end as an app: nothing it did was
+saved, and the scoring logic existed twice. This loop builds the real thing
+on the API instead.
+
+### Build
+- **Analyst decisions** (`services.record_decision`): confirm, dismiss,
+  reopen, or add a note. Statuses only move open → confirmed fraud or
+  dismissed, and back via reopen; anything else is refused with a reason.
+  Every action, with the analyst's name and note, is appended to the audit
+  trail, so a reopened case keeps the record of the first decision. Also
+  available as `POST /v1/incidents/{id}/actions`.
+- **Score breakdown stored** (migration 0003): each model score keeps every
+  feature's contribution as it was at scoring time, so the case page can show
+  the full picture even after the customer's history has grown.
+- **Web app** (`app/web/`): FastAPI routes rendering Jinja2 templates, no
+  JavaScript. Forms post back and redirect (post/redirect/get), so refreshing
+  never repeats an action; one-time messages travel in a short-lived cookie.
+  Pages: incident queue + case file, transaction tester, model results, how
+  it works. All user text is escaped by the templates.
+- **Demo mode** (`app/demo.py`): the labelled simulator with a fixed seed.
+  Loading 1,600 transactions takes under a second because scoring runs in
+  memory with the same code as the API and is written in one database
+  transaction (the per-request path would need ~6,000 round trips, too slow
+  against a hosted database). Advancing the feed uses the normal ingest path.
+  The answer key is rebuilt from the seed, so no labels are stored anywhere
+  the detector could see them.
+- **Deployable**: listens on `$PORT`, accepts `postgres://` URLs from hosting
+  providers, and `render.yaml` sets up the app and database on Render.
+- **CI** now also loads the demo inside the Docker image and requests every
+  page, and turns test failures into annotations readable without the logs.
+- **Tests**: 35 → 54. New: every page, decisions (saved, named, escaped,
+  invalid transitions refused), demo load/advance/finish, answer key, the
+  transaction tester, demo mode switched off, URL normalisation, actions API.
+
+### Evaluate
+- All 54 tests pass locally against PostgreSQL 16 and in CI.
+- Checked by hand: load demo, advance a day (105 transactions, 3 new
+  incidents), confirm with a note containing HTML (shown escaped), confirm
+  twice (refused with the reason), reopen through the API (audit trail shows
+  created → confirmed → reopened), send a stolen-login test (incident opened),
+  invalid amount (explained on the form).
+- Pages checked at desktop and phone widths in light and dark themes; no
+  horizontal overflow.
+
+### Improve (inputs to Loop 4)
+- **Logins.** Anyone who can open the app can record a decision under any
+  name. Needed before real data.
+- **Use the decisions.** Confirmed and dismissed incidents are exactly the
+  labels a retraining job needs; nothing reads them yet.
+- **AI investigator** (Loop 4): draft a case summary from the evidence on
+  the case page for the analyst to check.
+- The queue shows one incident per flagged transaction. Several flags for
+  the same customer within minutes (a card-testing run) should group into one
+  case.
