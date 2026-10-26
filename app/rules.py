@@ -53,20 +53,36 @@ class RuleHit:
         return {"rule": self.rule, "reason": self.reason, "evidence": self.evidence}
 
 
+RULES_VERSION = "rules-loop1"
+
+
 @dataclass(frozen=True)
 class Assessment:
+    """A detector's verdict on one transaction.
+
+    Shared by every detector (these rules, the Loop 2 model) so the rest of
+    the app doesn't care which one produced it.
+    """
+
     score: float
     hits: list[RuleHit]
+    threshold: float = FLAG_THRESHOLD
+    detector: str = "rules"
+    version: str = RULES_VERSION
+    high_at: float = 0.8
+    medium_at: float = 0.6
+    # Model only: {"intercept": float, "contributions": {feature: log-odds}}
+    breakdown: dict | None = None
 
     @property
     def flagged(self) -> bool:
-        return self.score >= FLAG_THRESHOLD
+        return self.score >= self.threshold
 
     @property
     def severity(self) -> str:
-        if self.score >= 0.8:
+        if self.score >= self.high_at:
             return "high"
-        if self.score >= 0.6:
+        if self.score >= self.medium_at:
             return "medium"
         return "low"
 

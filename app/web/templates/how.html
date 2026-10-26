@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}How it works · Aegis{% endblock %}
+{% block content %}
+<div class="page">
+  <section><h2>How Aegis works</h2>
+    <p>Aegis is a fraud and risk engine, built in loops. It takes in transactions through a REST API, scores each one against that customer's own behaviour, opens an incident when the risk is high, and gives an analyst the evidence to decide. The model assists; the analyst decides.</p></section>
+
+  <section><h3>What happens to each transaction</h3>
+    <div class="flow">
+      <div class="panel"><b>Validate</b><span class="muted">Strict schema: positive amounts, time-zone-aware timestamps, no unknown fields, no duplicates.</span><code>POST /v1/transactions</code></div>
+      <div class="panel"><b>Load history</b><span class="muted">The customer's last 200 earlier transactions.</span><code>PostgreSQL</code></div>
+      <div class="panel"><b>Compute features</b><span class="muted">15 numbers comparing this payment with what is normal for this customer.</span><code>app/features.py</code></div>
+      <div class="panel"><b>Score</b><span class="muted">Logistic regression gives a risk score from 0 to 1, plus each feature's push.</span><code>app/model.py</code></div>
+      <div class="panel"><b>Open an incident</b><span class="muted">Above the threshold: an incident with severity, evidence and an audit trail.</span><code>incidents, incident_events</code></div>
+      <div class="panel"><b>Analyst decides</b><span class="muted">Confirm, dismiss or reopen, with notes. Every action is appended to the audit trail.</span><code>POST /v1/incidents/{id}/actions</code></div>
+    </div></section>
+
+  <section><h3>The 15 features</h3>
+    <div class="panel tablewrap"><table><thead><tr><th>Feature</th><th>What it measures</th></tr></thead><tbody>
+      {% for a, b in glossary %}<tr><td>{{ a }}</td><td style="white-space:normal">{{ b }}</td></tr>{% endfor %}
+    </tbody></table></div></section>
+
+  <section><h3>How it's built</h3>
+    <p>Everything is Python. FastAPI serves both the JSON API and these pages, which are rendered on the server with Jinja2 templates; there is no JavaScript. Data lives in PostgreSQL through SQLAlchemy, with Alembic migrations. The model was trained with scikit-learn and exported as plain numbers, so the app scores with a dot product and needs no machine-learning libraries at run time. GitHub Actions runs the tests against a real database on every change.</p></section>
+
+  <section><h3>Build loops</h3>
+    <div class="loops">
+      {% for c, h, d in [("done", "Loop 1 · done", "Skeleton: API, PostgreSQL, four hand-written rules, incidents with an audit trail, tests."),
+                          ("done", "Loop 2 · done", "Labelled simulator, behavioural features, trained and compared models, explanations, migrations, CI."),
+                          ("done", "Loop 3 · done", "This web app: incident queue, case files, analyst decisions with notes and audit trail."),
+                          ("next", "Loop 4 · next", "AI investigator: a language model drafts the case summary from the evidence."),
+                          ("later", "Loop 5", "Operations: logins, monitoring, webhooks, a queue for high volume.")] %}
+      <div class="panel"><b class="{{ c }}">{{ h }}</b><span class="muted">{{ d }}</span></div>
+      {% endfor %}
+    </div></section>
+</div>
+{% endblock %}

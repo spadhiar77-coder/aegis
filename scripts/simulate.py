@@ -1,83 +1,30 @@
-"""Synthetic transaction simulator.
+"""Replay labelled synthetic transactions through the running API.
 
-Posts a stream of mostly-ordinary transactions to the API, with a few
-deliberately suspicious ones mixed in (large amounts, bursts, new devices,
-night-time activity), so there is something for the rules to find.
+Generates customers with ordinary behaviour, innocent quirks and a few fraud
+attacks (see ml/simulation.py), posts every transaction to
+POST /v1/transactions in time order, then compares the API's verdicts with the
+ground-truth labels, which the API never sees.
 
 Usage:
-    python scripts/simulate.py --count 200 --url http://localhost:8000
+    python scripts/simulate.py --customers 30 --days 14 --seed 7
+    python scripts/simulate.py --count 200 --seed 7        # stop after 200 transactions
 
-Only uses the standard library so it runs without extra installs. `--seed`
-makes a run reproducible.
+Standard library only, so it runs without extra installs. `--seed` makes a
+run reproducible (and re-running the same seed against the same database will
+hit the duplicate check: use a fresh seed or database).
 """
 
 import argparse
 import json
-import random
+import sys
 import urllib.error
 import urllib.request
-import uuid
-from datetime import datetime, timedelta, timezone
+from collections import Counter
+from pathlib import Path
 
-MERCHANTS = ["Tesco", "Sainsbury's", "Amazon", "Uber", "Shell", "Pret", "Netflix", "Boots", "Argos", "Deliveroo"]
-LOCATIONS = ["GB", "GB", "GB", "GB", "IE", "FR", "DE", "US"]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-
-def make_customers(n: int, rng: random.Random) -> list[dict]:
-    return [
-        {
-            "customer_id": f"cust_{i:04d}",
-            "devices": [f"dev_{uuid.UUID(int=rng.getrandbits(128)).hex[:8]}" for _ in range(rng.randint(1, 2))],
-            "home": rng.choice(LOCATIONS[:4]),
-            "typical_amount": rng.uniform(10, 120),
-        }
-        for i in range(n)
-    ]
-
-
-def ordinary(c: dict, ts: datetime, rng: random.Random) -> dict:
-    return {
-        "customer_id": c["customer_id"],
-        "amount": f"{max(1.0, rng.gauss(c['typical_amount'], c['typical_amount'] / 3)):.2f}",
-        "currency": "GBP",
-        "timestamp": ts.isoformat(),
-        "merchant": rng.choice(MERCHANTS),
-        "location": c["home"],
-        "device_id": rng.choice(c["devices"]),
-        "status": "approved",
-    }
-
-
-def generate(count: int, rng: random.Random, anomaly_rate: float) -> list[dict]:
-    customers = make_customers(max(5, count // 10), rng)
-    # Start yesterday at 08:00 UTC and walk forward.
-    ts = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0) - timedelta(days=1)
-    out: list[dict] = []
-    while len(out) < count:
-        ts += timedelta(minutes=rng.randint(1, 15))
-        c = rng.choice(customers)
-        t = ordinary(c, ts, rng)
-        if rng.random() < anomaly_rate:
-            kind = rng.choice(["big", "burst", "new_device", "night_big"])
-            if kind == "big":
-                t["amount"] = f"{rng.uniform(5000, 15000):.2f}"
-            elif kind == "new_device":
-                t["device_id"] = "dev_unknown_" + uuid.UUID(int=rng.getrandbits(128)).hex[:6]
-                t["amount"] = f"{rng.uniform(800, 3000):.2f}"
-            elif kind == "night_big":
-                t["timestamp"] = ts.replace(hour=3).isoformat()
-                t["amount"] = f"{rng.uniform(5000, 9000):.2f}"
-            elif kind == "burst":
-                # Several quick transactions; the 4th+ trips the velocity rule.
-                for k in range(4):
-                    b = ordinary(c, ts + timedelta(minutes=k), rng)
-                    b["device_id"] = "dev_burst_" + c["customer_id"]
-                    out.append(b)
-                continue
-        out.append(t)
-    for t in out:
-        t["transaction_id"] = "sim_" + uuid.UUID(int=rng.getrandbits(128)).hex[:16]
-    return out[:count]
+from ml.simulation import generate  # noqa: E402
 
 
 def post(url: str, body: dict) -> dict:
@@ -94,26 +41,48 @@ def post(url: str, body: dict) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default="http://localhost:8000")
-    p.add_argument("--count", type=int, default=100)
-    p.add_argument("--anomaly-rate", type=float, default=0.05)
+    p.add_argument("--customers", type=int, default=30)
+    p.add_argument("--days", type=int, default=14)
+    p.add_argument("--fraud-rate", type=float, default=0.15, help="share of customers who suffer one attack")
+    p.add_argument("--count", type=int, default=None, help="stop after this many transactions")
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--quiet", action="store_true", help="only print the summary")
     args = p.parse_args()
 
-    rng = random.Random(args.seed)
-    flagged = errors = 0
-    txns = generate(args.count, rng, args.anomaly_rate)
+    seed = args.seed if args.seed is not None else int.from_bytes(__import__("os").urandom(4), "big")
+    txns = generate(customers=args.customers, days=args.days, seed=seed, fraud_customer_rate=args.fraud_rate)
+    if args.count is not None:
+        txns = txns[: args.count]
+
+    outcome = Counter()
+    detector = None
     for t in txns:
         try:
-            result = post(args.url.rstrip("/"), t)
+            result = post(args.url.rstrip("/"), t.api_body())
         except urllib.error.HTTPError as e:
-            errors += 1
-            print(f"{t['transaction_id']}: HTTP {e.code} {e.read().decode()[:200]}")
+            outcome["error"] += 1
+            print(f"{t.transaction_id}: HTTP {e.code} {e.read().decode()[:200]}")
             continue
-        if result["flagged"]:
-            flagged += 1
+        detector = detector or f"{result['transaction']['detector']} ({result['transaction']['model_version']})"
+        flagged = result["flagged"]
+        outcome[("flagged" if flagged else "passed", "fraud" if t.is_fraud else "legit")] += 1
+        if flagged and not args.quiet:
             reasons = ", ".join(r["rule"] for r in result["transaction"]["risk_reasons"])
-            print(f"FLAGGED {t['transaction_id']} -> incident #{result['incident_id']} ({reasons})")
-    print(f"\nSent {len(txns)} transactions: {flagged} flagged, {errors} errors.")
+            truth = f"TRUE fraud ({t.scenario})" if t.is_fraud else f"false alarm ({t.scenario})"
+            print(f"FLAGGED {t.transaction_id} -> incident #{result['incident_id']}: {truth}; {reasons}")
+        elif t.is_fraud and not args.quiet:
+            print(f"missed  {t.transaction_id}: {t.scenario} {t.amount} {t.currency} at {t.merchant}")
+
+    tp, fp = outcome[("flagged", "fraud")], outcome[("flagged", "legit")]
+    fn = outcome[("passed", "fraud")]
+    print(f"\nSeed {seed}, detector {detector}: sent {len(txns)} transactions, {outcome['error']} errors.")
+    print(f"Fraudulent: {tp + fn}. Caught {tp}, missed {fn}. False alarms: {fp}.")
+    if tp + fp:
+        print(f"Precision {tp / (tp + fp):.0%}", end="")
+    if tp + fn:
+        print(f", recall {tp / (tp + fn):.0%}", end="")
+    print()
+    sys.exit(1 if outcome["error"] else 0)
 
 
 if __name__ == "__main__":

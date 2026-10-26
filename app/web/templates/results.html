@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Model results · Aegis{% endblock %}
+{% block content %}{% set r = R.r %}{% set L = r.logreg %}{% set B = r.rules %}
+{% macro bar(x, rules=false) -%}<span class="barcell {{ 'rules' if rules else '' }}"><i style="width:{{ [1, x * 100]|max }}px"></i><span class="num">{{ pct(x) }}</span></span>{%- endmacro %}
+<div class="page">
+  <section><h2>Model results</h2>
+    <p>Every detector was tested on the same <b>{{ '{:,}'.format(R.training.rows.test) }} held-out transactions</b> ({{ R.training.fraud_rows.test }} fraudulent, from {{ L.attacks_total }} attacks): the last {{ R.training.days - R.training.train_days - R.training.val_days }} days of a {{ R.training.days }}-day simulation of {{ '{:,}'.format(R.training.customers) }} customers. Models trained on the first {{ R.training.train_days }} days and picked their alert threshold on the next {{ R.training.val_days }}, so nothing was tuned on the test data.</p></section>
+
+  <section><h3>Loop 1 rules → Loop 2 model</h3>
+    <div class="duel">
+      {% for l, o, n, s in [("PR-AUC", '%.3f' % B.pr_auc, '%.3f' % L.pr_auc, "How well it ranks fraud above genuine payments (1.0 is perfect)"),
+                            ("Precision", pct(B.precision), pct(L.precision), "Share of alerts that really were fraud"),
+                            ("Recall", pct(B.recall), pct(L.recall), "Share of fraudulent transactions flagged"),
+                            ("Alerts per 1,000", '%.1f' % B.alerts_per_1000, '%.1f' % L.alerts_per_1000, "Analyst workload")] %}
+      <div class="panel"><span class="label">{{ l }}</span><div class="pair"><span class="old">{{ o }}</span><span class="new">{{ n }}</span></div><small>{{ s }}</small></div>
+      {% endfor %}
+    </div>
+    <p>The model finds four times as much fraud while raising about 40% fewer alerts. The rules' alerts were wrong six times out of seven.</p></section>
+
+  <section><h3>All five detectors</h3>
+    <div class="panel tablewrap"><table><thead><tr><th>Detector</th><th class="num">PR-AUC</th><th>Precision</th><th>Recall</th><th class="num">Alerts / 1,000</th><th class="num">Attacks stopped</th><th>Fraud value caught</th></tr></thead><tbody>
+      {% for n in R.names %}{% set x = r[n] %}
+      <tr><td>{{ DETECTOR_NAME[n] }}{% if n == 'logreg' %} <span class="pill st-open">deployed</span>{% endif %}</td>
+        <td class="num mono">{{ 'n/a' if x.pr_auc is none else '%.3f' % x.pr_auc }}</td>
+        <td>{{ bar(x.precision, n == 'rules') }}</td><td>{{ bar(x.recall, n == 'rules') }}</td>
+        <td class="num mono">{{ '%.1f' % x.alerts_per_1000 }}</td><td class="num mono">{{ x.attacks_caught }}/{{ x.attacks_total }}</td>
+        <td>{{ bar(x.fraud_value_caught, n == 'rules') }}</td></tr>
+      {% endfor %}
+    </tbody></table></div>
+    <p class="note">Isolation Forest never sees a fraud label, yet still reaches PR-AUC {{ '%.2f' % r.iforest.pr_auc }}. Gradient boosting was no better than logistic regression, so the model whose every decision can be explained was deployed.</p></section>
+
+  <section><h3>Recall by type of fraud</h3>
+    <div class="panel tablewrap"><table><thead><tr><th>Detector</th>{% for s in R.scenarios %}<th>{{ SCENARIO[s] }}</th>{% endfor %}</tr></thead><tbody>
+      {% for n in R.names %}<tr><td>{{ DETECTOR_NAME[n] }}</td>{% for s in R.scenarios %}<td>{{ bar(r[n].recall_by_scenario[s].recall, n == 'rules') }}</td>{% endfor %}</tr>{% endfor %}
+    </tbody></table></div></section>
+
+  <div class="callout"><b>The blind spot: scam payments</b>
+    <p>Every learned model caught 0% of authorised push payment scams. In this data they look exactly like genuine large transfers to a new payee: the real customer, on their own phone, at home, at a normal hour. The rules caught two thirds only because they flag every payment over £5,000, which is also why they catch more fraud by value ({{ pct(B.fraud_value_caught, 0) }} against the model's {{ pct(L.fraud_value_caught, 0) }}): scams are rare but large.</p>
+    <p>Adding one guardrail rule (large payment to a new payee) to the model lifts fraud value caught to {{ pct(r['logreg+guardrail'].fraud_value_caught, 0) }}, but precision falls from {{ pct(L.precision, 0) }} to {{ pct(r['logreg+guardrail'].precision, 0) }}. That is worth it only if those alerts trigger something cheap, like a warning screen or a confirmation call. It's measured here and not deployed, because it's a product decision. Real banks add other signals here: Confirmation of Payee, payee account age and intelligence on mule accounts.</p></div>
+
+  <section><h3>Where false alarms come from</h3>
+    <p>Most of the rules' false alarms were customers being themselves. Comparing each payment with that customer's own history removes almost all of them.</p>
+    <div class="panel tablewrap"><table><thead><tr><th>Genuine behaviour</th><th>Loop 1 rules</th><th class="num">Loop 2 model</th></tr></thead><tbody>
+      {% for s in R.fp_sources %}{% set c = B.false_positives_by_source.get(s, 0) %}
+      <tr><td>{{ SCENARIO.get(s, s) }}</td><td><span class="barcell rules"><i style="width:{{ c / R.fp_max * 140 }}px"></i><span class="num">{{ c }}</span></span></td><td class="num mono">{{ L.false_positives_by_source.get(s, 0) }}</td></tr>
+      {% endfor %}
+    </tbody></table></div></section>
+
+  {% if R.robust %}
+  <section><h3>Does it hold up on other data?</h3>
+    <p>The whole experiment was repeated on five more independently simulated datasets. PR-AUC, mean ± one standard deviation:</p>
+    <div class="panel" style="padding:16px"><div class="whisk">
+      {% for n in ['rules', 'logreg', 'iforest', 'gbm'] if n in R.robust %}{% set m, sd = R.robust[n] %}
+      <span>{{ DETECTOR_NAME[n] }}</span><span class="track"><span class="err" style="left:{{ (m - sd) * 100 }}%;width:{{ 2 * sd * 100 }}%"></span><span class="pt {{ 'rules' if n == 'rules' else '' }}" style="left:{{ m * 100 }}%"></span></span><span class="num">{{ '%.3f' % m }} ± {{ '%.3f' % sd }}</span>
+      {% endfor %}</div>
+      <div class="whisk-axis"><div></div><div><span>0</span><span>0.5</span><span>1.0</span></div><div></div></div></div></section>
+  {% endif %}
+
+  <section><h3>What the model learned</h3>
+    <p>Logistic regression weights ({{ R.version }}), per standard deviation of each feature. Red pushes towards fraud.</p>
+    <div class="panel" style="padding:16px"><div class="contrib">
+      {% for b in R.coefs %}<span class="name">{{ b.label }}</span><span class="track"><span class="bar {{ 'up' if b.value >= 0 else 'down' }}" style="width:{{ b.width }}%"></span></span><span class="num">{{ '+' if b.value >= 0 else '−' }}{{ '%.2f' % (b.value|abs) }}</span>{% endfor %}
+    </div></div></section>
+
+  <p class="note" style="max-width:70ch">All results come from Aegis's own transaction simulator. They show that the model learns the simulated fraud patterns, not that it would catch real fraud. Testing on a public labelled dataset is planned.</p>
+</div>
+{% endblock %}

@@ -38,6 +38,16 @@ class TransactionIn(BaseModel):
     status: TransactionStatus = "approved"
 
 
+class IncidentAction(BaseModel):
+    """Body of POST /v1/incidents/{id}/actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["confirm", "dismiss", "reopen", "note"]
+    analyst: str = Field(min_length=1, max_length=48, examples=["s.padhiar"])
+    note: str | None = Field(default=None, max_length=2000)
+
+
 # --------------------------------------------------------------- responses
 
 
@@ -61,6 +71,9 @@ class TransactionOut(BaseModel):
     status: str
     risk_score: float
     risk_reasons: list[RuleHitOut]
+    detector: str
+    model_version: str | None
+    risk_breakdown: dict | None = None
     received_at: datetime
 
 

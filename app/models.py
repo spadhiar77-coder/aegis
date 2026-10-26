@@ -1,4 +1,11 @@
-"""ORM models: the four tables Loop 1 needs.
+"""ORM models.
+
+The schema is managed by Alembic (migrations/). After changing a model, run
+`alembic revision --autogenerate -m "..."`, review the generated file, and
+commit it with the model change; tests/test_migrations.py fails if the two
+ever disagree.
+
+Tables:
 
     transactions            one row per ingested transaction
     incidents               a case opened when a transaction looks suspicious
@@ -50,6 +57,14 @@ class Transaction(Base):
     # has a score and an explanation, not just the flagged ones.
     risk_score: Mapped[float] = mapped_column(Float, default=0.0)
     risk_reasons: Mapped[list] = mapped_column(JSON, default=list)
+    # Which detector scored it ("rules" or "model") and which version, so a
+    # score can always be traced back to the exact logic that produced it.
+    detector: Mapped[str] = mapped_column(String(32), default="rules", server_default="rules")
+    model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Full breakdown of a model score: {"intercept", "contributions": {feature: log-odds}}.
+    # Lets the case page show every feature's push exactly as it was at scoring
+    # time, even after the customer's history has grown. None for rule scores.
+    risk_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -63,6 +78,7 @@ class Incident(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     severity: Mapped[str] = mapped_column(String(16), index=True)  # low | medium | high
+    # open | confirmed_fraud | dismissed (see services.record_decision)
     status: Mapped[str] = mapped_column(String(16), default="open", index=True)
     risk_score: Mapped[float] = mapped_column(Float)
     summary: Mapped[str] = mapped_column(String(512))
@@ -88,8 +104,9 @@ class IncidentEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
-    event_type: Mapped[str] = mapped_column(String(32))  # Loop 1 only writes "created"
-    actor: Mapped[str] = mapped_column(String(64))  # "system" for now; analyst IDs in Loop 3
+    # created | confirmed_fraud | dismissed | reopened | note
+    event_type: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(64))  # "system" or "analyst:<name>"
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

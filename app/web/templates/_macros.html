@@ -1,0 +1,36 @@
+{% macro meter(m) -%}
+<div class="meter" role="img" aria-label="Risk score {{ score(m.score) }} against a threshold of {{ '%.3f' % m.threshold }}">
+  <div class="fill" style="width:{{ m.score * 100 }}%"></div>
+  <div class="thr" style="left:{{ m.threshold * 100 }}%"><span>flag at {{ '%.2f' % m.threshold }}</span></div>
+  <div class="mark {{ m.edge }}" style="left:{{ m.score * 100 }}%"><b>{{ score(m.score) }}</b></div>
+  <div class="ends"><span>0</span><span>1</span></div>
+</div>
+{%- endmacro %}
+
+{% macro reasons(hits) -%}
+<ul class="reasons">
+  {% for h in hits %}
+  {% set c = h.evidence.get('contribution_log_odds') if h.evidence else none %}
+  <li><span>{{ h.reason }}<br><code>{{ h.rule }}</code></span>{% if c is not none %}<span class="num">+{{ '%.2f' % c }}</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{%- endmacro %}
+
+{% macro chart(c) -%}
+<div><h3>What moved the score</h3>
+  <p class="note">Each feature's push in log-odds, compared with an average training transaction. Red pushes towards fraud, green towards genuine.{% if c.hidden %} {{ c.hidden }} features had almost no effect.{% endif %}</p>
+  <div class="contrib">
+    {% for b in c.bars %}
+    <span class="name" title="{{ b.name }}">{{ b.label }}</span>
+    <span class="track"><span class="bar {{ 'up' if b.value >= 0 else 'down' }}" style="width:{{ b.width }}%"></span></span>
+    <span class="num">{{ '+' if b.value >= 0 else '−' }}{{ '%.2f' % (b.value|abs) }}</span>
+    {% endfor %}
+  </div>
+  <div class="contrib-axis"><div></div><div><span>−{{ '%.1f' % c.scale }}</span><span>0</span><span>+{{ '%.1f' % c.scale }}</span></div><div></div></div>
+  <p class="sum-line">Starting point {{ '%.2f' % c.intercept }} + pushes = {{ '%.2f' % c.logit }} log-odds → score.</p>
+</div>
+{%- endmacro %}
+
+{% macro truth(label) -%}
+{% if label %}{% if label[0] %}<span class="truth fraud">Fraud</span>{% else %}<span class="truth legit">Genuine</span>{% endif %}{% endif %}
+{%- endmacro %}

@@ -1,0 +1,23 @@
+# One-click deployment on Render (https://render.com): New > Blueprint, pick this repo.
+# Creates the web app (built from the Dockerfile) and a PostgreSQL database,
+# and connects them. The free plans sleep when idle and the free database is
+# time-limited; check Render's current terms before relying on it.
+services:
+  - type: web
+    name: aegis
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: aegis-db
+          property: connectionString
+      - key: AEGIS_DEMO
+        value: "1"   # set to "0" once real data lives here
+
+databases:
+  - name: aegis-db
+    plan: free
+    databaseName: aegis
+    user: aegis

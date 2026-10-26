@@ -23,6 +23,7 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql+psycopg://aegis:aegis@db:5432/aegis
+      AEGIS_DEMO: "1"
     ports:
       - "8000:8000"
     depends_on:

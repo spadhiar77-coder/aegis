@@ -1,0 +1,4 @@
+# Offline training only (python -m ml.train). The API does not need these:
+# it scores with the exported coefficients in app/model/model.json.
+numpy==2.5.3
+scikit-learn==1.9.1

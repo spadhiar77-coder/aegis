@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% from "_macros.html" import meter, reasons, chart, truth %}
+{% block title %}{% if case and case.incident %}Incident #{{ case.incident.id }} · {% endif %}Aegis Fraud Console{% endblock %}
+{% block content %}
+
+{% if not stats.txns %}
+<div class="panel empty-state">
+  <h2>No transactions yet</h2>
+  {% if demo_enabled %}
+  <p>Load the demo: 40 simulated bank customers and 17 days of card payments and transfers, scored by the Aegis model. Then advance the feed to watch new incidents arrive.</p>
+  <form method="post" action="/demo/reset"><button class="btn primary" type="submit">Load demo data</button></form>
+  {% endif %}
+  <p class="muted">Payment systems send transactions to <code>POST /v1/transactions</code>; see the <a href="/docs">API documentation</a>.</p>
+</div>
+{% else %}
+
+<p class="intro">Aegis scores every incoming payment against that customer's own history. Suspicious ones open an incident here for an analyst to confirm or dismiss.{% if demo_enabled %} The customers and payments are simulated; <strong>advance the feed</strong> to send in more, or turn on the <strong>answer key</strong> to see which payments were really fraud.{% endif %}</p>
+
+{% if feed %}
+<div class="panel feedbar">
+  <div class="clock"><span class="label">Feed time (UTC)</span><span class="num">{{ when(feed.clock, true) }}</span></div>
+  <div class="progress" aria-hidden="true"><i style="width:{{ 100 * feed.loaded / feed.total }}%"></i></div>
+  <div class="controls">
+    {% if not feed.finished %}
+    <span class="label">Advance</span>
+    {% for h, l in [(1, "+1 hour"), (6, "+6 hours"), (24, "+1 day")] %}
+    <form method="post" action="/demo/advance"><input type="hidden" name="hours" value="{{ h }}"><input type="hidden" name="status" value="{{ status }}">{% if key %}<input type="hidden" name="key" value="1">{% endif %}<button class="btn {{ 'primary' if h == 6 else '' }}" type="submit">{{ l }}</button></form>
+    {% endfor %}
+    {% else %}<span class="note">Demo feed finished.</span>{% endif %}
+    <form method="post" action="/demo/reset"><button class="btn" type="submit">Restart demo</button></form>
+    <a class="btn" href="{{ queue_url(status, not key, request.url.path) }}" aria-pressed="{{ 'true' if key else 'false' }}">{{ 'Hide answer key' if key else 'Show answer key' }}</a>
+  </div>
+</div>
+{% endif %}
+
+<div class="stats">
+  <div class="stat"><span class="label">Transactions scored</span><span class="num">{{ '{:,}'.format(stats.txns) }}</span><small>{% if feed %}{{ '{:,}'.format(feed.loaded) }} of {{ '{:,}'.format(feed.total) }} demo payments{% else %}all time{% endif %}</small></div>
+  <div class="stat"><span class="label">Incidents opened</span><span class="num">{{ stats.incidents }}</span><small>{{ stats.open }} still open</small></div>
+  <div class="stat"><span class="label">Alerts per 1,000</span><span class="num">{{ '%.1f' % stats.rate }}</span><small>{% if feed %}the demo has extra fraud{% else %}analyst workload{% endif %}</small></div>
+  {% if answer %}
+  <div class="stat key"><span class="label">Fraud caught</span><span class="num">{{ answer.tp }}/{{ answer.tp + answer.fn }}</span><small>{{ answer.attacks_caught }} of {{ answer.attacks }} attacks stopped</small></div>
+  <div class="stat key"><span class="label">False alarms</span><span class="num">{{ answer.fp }}</span><small>genuine payments flagged</small></div>
+  {% endif %}
+</div>
+
+<div class="console{% if case %} has-case{% endif %}">
+  <aside class="panel queue">
+    <div class="queue-head"><h3>Incident queue</h3>
+      <span class="seg" role="group" aria-label="Filter">{% for k, l in filters.items() %}<a href="{{ queue_url(k, key) }}" aria-current="{{ 'true' if k == status else 'false' }}">{{ l }}</a>{% endfor %}</span></div>
+    <div class="list">
+      {% for inc in incidents %}{% set t = inc.transactions[0] %}
+      <a class="inc" href="{{ queue_url(status, key, '/incidents/' ~ inc.id) }}" aria-current="{{ 'true' if case and case.incident and case.incident.id == inc.id else 'false' }}">
+        <span class="score">{{ score(inc.risk_score) }}</span>
+        <span class="line1"><span class="amt">{{ gbp(t.amount) }}</span><span class="who">{{ t.merchant }}</span></span>
+        <span class="right"><span class="pill sev-{{ inc.severity }}">{{ inc.severity }}</span></span>
+        <span class="why">{{ inc.evidence[0].reason if inc.evidence else 'Overall risk score' }}</span>
+        <span class="meta">#{{ inc.id }} · {{ t.customer_id }} · {{ when(t.timestamp) }}{% if inc.status != 'open' %} <span class="pill st-{{ 'confirmed' if inc.status == 'confirmed_fraud' else 'dismissed' }}">{{ STATUS_LABEL[inc.status] }}</span>{% endif %} {{ truth(labels.get(inc.id)) }}</span>
+      </a>
+      {% else %}
+      <p class="empty">{% if status == 'decided' %}No decisions yet. Open a case and confirm or dismiss it.{% elif status == 'open' %}No open incidents. Everything has been reviewed.{% else %}No incidents yet.{% endif %}</p>
+      {% endfor %}
+      {% if matching > incidents|length %}<a class="more" href="{{ queue_url(status, key) }}{{ '&' if '?' in queue_url(status, key) else '?' }}limit={{ limit + 100 }}">Show older ({{ matching - incidents|length }} more)</a>{% endif %}
+      {% if answer %}
+      <div class="missed-head"><span class="label">Missed fraud · {{ answer.missed_total }}</span>
+        <p class="note">Fraudulent payments the model let through. Only visible with the answer key.</p></div>
+      {% for t, scenario in answer.missed %}
+      <a class="inc" href="{{ queue_url(status, key, '/transactions/' ~ t.transaction_id) }}" aria-current="{{ 'true' if case and case.txn.id == t.id else 'false' }}">
+        <span class="score">{{ score(t.risk_score) }}</span>
+        <span class="line1"><span class="amt">{{ gbp(t.amount) }}</span><span class="who">{{ t.merchant }}</span></span>
+        <span class="right"><span class="truth fraud">Missed</span></span>
+        <span class="why">{{ SCENARIO.get(scenario, scenario) }}</span>
+        <span class="meta">{{ t.customer_id }} · {{ when(t.timestamp) }}</span>
+      </a>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </aside>
+
+  <article class="panel case" aria-labelledby="case-title">
+  {% if not case %}
+    <div class="empty"><h3 id="case-title">No case open</h3><p>Pick an incident from the queue.</p></div>
+  {% else %}{% set t = case.txn %}{% set inc = case.incident %}
+    <div class="case-head"><div>
+        <span class="label" id="case-title">{% if inc %}Incident #{{ inc.id }}{% else %}Transaction, not flagged{% endif %}</span>
+        <div class="big-amt">{{ gbp(t.amount) }}</div><div>at <b>{{ t.merchant }}</b></div></div>
+      <div class="pills">{% if inc %}<span class="pill sev-{{ inc.severity }}">{{ inc.severity }} severity</span><span class="pill st-{{ {'open': 'open', 'confirmed_fraud': 'confirmed', 'dismissed': 'dismissed'}[inc.status] }}">{{ STATUS_LABEL[inc.status] }}</span>{% endif %} {{ truth(case.label) }}{% if case.user_test %}<span class="truth you">Your test</span>{% endif %}</div></div>
+    <dl class="facts">
+      <div><dt>Customer</dt><dd>{{ t.customer_id }}</dd></div><div><dt>Time (UTC)</dt><dd>{{ when(t.timestamp, true) }}</dd></div>
+      <div><dt>Location</dt><dd>{{ t.location }}</dd></div><div><dt>Device</dt><dd>{{ t.device_id }}</dd></div>
+      <div><dt>Transaction</dt><dd>{{ t.transaction_id }}</dd></div><div><dt>Scored by</dt><dd>{{ t.model_version or t.detector }}</dd></div>
+    </dl>
+    {% if case.label %}<div class="answer">Answer key: {% if case.label[0] %}<b style="color:var(--high)">fraud</b>{% else %}<b style="color:var(--ok)">genuine</b>{% endif %}, {{ SCENARIO.get(case.label[1], case.label[1]) }}. The model never sees this label.</div>{% endif %}
+
+    <div><h3>Risk score</h3>{{ meter(case.meter) }}</div>
+    {% if t.risk_reasons %}<div><h3>{% if inc %}Why it was flagged{% else %}Strongest signals{% endif %}</h3>{{ reasons(t.risk_reasons) }}</div>{% endif %}
+    {% if case.chart %}{{ chart(case.chart) }}{% endif %}
+    <p class="note">Loop 1 rules would have scored this {{ score(case.rules_view.score) }} ({{ 'flag' if case.rules_view.flagged else 'pass' }}{% if case.rules_view.hits %}: {{ case.rules_view.hits|map(attribute='rule')|join(', ') }}{% endif %}).</p>
+
+    <div><h3>{{ t.customer_id }}: recent activity</h3>
+      <p class="note">{{ case.history_size }} earlier transactions on record. Values in red were not seen for this customer before the last 24 hours.</p>
+      <div class="tablewrap"><table><thead><tr><th>Time (UTC)</th><th class="num">Amount</th><th>Merchant</th><th>Where</th><th>Device</th></tr></thead><tbody>
+      {% for x in case.recent %}
+      <tr class="{{ 'this' if x.id == t.id else '' }}"><td class="mono">{{ when(x.timestamp) }}</td><td class="num mono">{{ gbp(x.amount) }}</td><td>{{ x.merchant }}</td>
+        <td class="{{ 'newmark' if case.has_established and x.location not in case.known_locations else '' }}">{{ x.location }}</td>
+        <td class="mono {{ 'newmark' if case.has_established and x.device_id not in case.known_devices else '' }}">{{ short_device(x.device_id) }}</td></tr>
+      {% endfor %}
+      </tbody></table></div></div>
+
+    {% if inc %}
+    <div><h3>Decision</h3>
+      <form class="decide" method="post" action="/incidents/{{ inc.id }}/decision">
+        <input type="hidden" name="status" value="{{ status }}">{% if key %}<input type="hidden" name="key" value="1">{% endif %}
+        <div class="row2"><div class="field"><label for="analyst">Your name</label><input id="analyst" name="analyst" maxlength="48" value="{{ analyst }}" autocomplete="name" required></div><div></div></div>
+        <div class="field"><label for="note">Note (optional)</label><textarea id="note" name="note" maxlength="2000" placeholder="What did you check? e.g. called the customer, they don't recognise the payment"></textarea></div>
+        <div class="actions">
+          {% if inc.status == 'open' %}
+          <button class="btn danger" name="action" value="confirm" type="submit">Confirm fraud</button>
+          <button class="btn good" name="action" value="dismiss" type="submit">Dismiss as genuine</button>
+          {% else %}
+          <button class="btn" name="action" value="reopen" type="submit">Reopen</button>
+          {% endif %}
+          <button class="btn" name="action" value="note" type="submit">Add note only</button>
+        </div>
+      </form></div>
+
+    <div><h3>Audit trail</h3><ol class="audit">
+      {% for e in inc.events %}
+      <li class="{{ 'analyst' if e.actor != 'system' else '' }}"><time>{{ when(e.created_at, true) }} UTC</time>
+        {{ EVENT_LABEL.get(e.event_type, e.event_type) }} by <b>{{ e.actor.split(':', 1)[1] if ':' in e.actor else e.actor }}</b>
+        {% if e.event_type == 'created' %}: {{ e.detail.get('detector', '') }} {{ e.detail.get('model_version', '') }}, score {{ score(e.detail.get('score', 0)) }} ≥ threshold {{ '%.3f' % e.detail.get('threshold', 0) }}{% endif %}
+        {% if e.detail.get('note') %}<span class="quote">{{ e.detail.note }}</span>{% endif %}</li>
+      {% endfor %}
+    </ol></div>
+    {% else %}
+    <p class="note">This transaction was not flagged, so no incident was opened.</p>
+    {% endif %}
+  {% endif %}
+  </article>
+</div>
+{% endif %}
+{% endblock %}
